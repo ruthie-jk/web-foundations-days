@@ -143,60 +143,54 @@ Object storage is designed to store and retrieve large files efficiently and can
         [App Servers] <----> [Application Cache]
                |
                +----------> [Database Primary]
-```
+
 
 The CDN serves cached image files, while feed requests pass through the load balancer and application servers. The application cache reduces repeated data lookups, and feed reads can use the database read replica. Original photos and generated thumbnails are stored in object storage.
 
-## 6. Components and the Problems They Solve
+## 6. Component Summary
 
-- **CDN:** Caches and delivers frequently requested photos from locations closer to users, reducing latency and load on the origin storage.
-- **Load balancer:** Distributes incoming application requests across multiple app servers to prevent one server from becoming overloaded.
-- **App servers:** Handle application logic, authentication, upload authorization, feed generation, and database interactions.
-- **Application cache:** Keeps frequently accessed information, such as feed data or profile metadata, available without repeatedly querying the database.
-- **Database primary:** Stores structured information such as users, follow relationships, photo metadata, captions, and object-storage keys.
-- **Database read replica:** Handles eligible read queries so that the primary database can focus on writes and other primary responsibilities.
-- **Object storage:** Stores original photos and thumbnails separately from structured database records, allowing image storage to scale independently.
-- **Queue:** Holds thumbnail-generation jobs so that photo uploads do not have to wait for image processing to finish.
-- **Thumbnail worker:** Processes queued jobs, generates smaller thumbnail images, stores them in object storage, and updates the relevant photo metadata when necessary.
+- **CDN:** Caches and delivers frequently requested photos closer to users, reducing image-loading latency and requests reaching the origin storage.
+- **Load balancer:** Distributes incoming requests across multiple application servers so that one server does not become overloaded.
+- **Application servers:** Handle user requests, validate uploads, generate feed responses, and coordinate database, storage, and queue operations.
+- **Application cache:** Stores frequently accessed feed data and metadata to reduce repeated database queries and improve response times.
+- **Primary database:** Stores structured information such as users, photo metadata, captions, follow relationships, and object-storage keys while handling writes.
+- **Database read replica:** Handles eligible read queries to reduce the primary database's workload, although replication lag can temporarily make its data stale.
+- **Object storage:** Stores original photos and thumbnails separately from database records, allowing large image files to scale independently of structured data.
+- **Queue:** Holds thumbnail-generation jobs until workers can process them, preventing image processing from delaying the upload request.
+- **Thumbnail worker:** Processes queued jobs, creates smaller thumbnail images, saves them in object storage, and records their availability.
 
-## 7. Photo Upload Flow
+## 7. Step-by-Step Photo Upload Flow
 
-1. A user selects a photo and submits it through the SnapShare application.
-2. The app server authenticates the user, validates the request, and authorizes the upload.
-3. The app server provides a short-lived upload URL or equivalent authorization for the object-storage destination.
-4. The client uploads the original photo directly to object storage, reducing the amount of large-file traffic passing through the application servers.
-5. Once the upload succeeds, the application records the photo metadata and storage key in the primary database.
-6. The application adds a thumbnail-generation job to the queue.
-7. A thumbnail worker retrieves the job and downloads or reads the original photo from object storage.
-8. The worker generates a 50 KB thumbnail and saves it in object storage.
-9. The worker records the thumbnail's storage key or marks thumbnail processing as complete.
-10. When users view a feed, the app retrieves feed metadata from the cache or an appropriate database replica and returns image URLs or keys.
-11. The CDN serves cached thumbnails or original photos when available and fetches missing objects from object storage.
+1. A user selects a photo and initiates an upload from the SnapShare application.
+2. The application server authenticates the user, validates the request, checks upload permissions, and authorizes the upload.
+3. The server provides a short-lived, authorized upload URL or equivalent mechanism for uploading the file directly to object storage.
+4. The client uploads the original photo to object storage, avoiding unnecessary transfer of the large file through the application server.
+5. After the upload succeeds, the application records the photo's metadata, owner, upload time, and storage key in the primary database.
+6. The application adds a thumbnail-generation job to the queue, including the photo identifier and original object's storage key.
+7. A thumbnail worker retrieves the job and reads the original photo from object storage.
+8. The worker generates a smaller thumbnail and saves it as a separate object in storage.
+9. The worker updates the photo metadata to record the thumbnail's storage key and processing status.
+10. When a user opens a feed, the application retrieves feed metadata from the cache or an appropriate database read replica and provides the relevant image URLs.
+11. The CDN serves cached images when available; otherwise, it retrieves the requested image from object storage and can cache it for subsequent requests.
 
-The thumbnail process runs asynchronously, meaning the upload does not have to wait for thumbnail generation to finish. The application can show a temporary processing state until the thumbnail is ready.
+Thumbnail generation happens asynchronously, so the original upload can complete before the thumbnail is ready. The application should display a processing state until the thumbnail becomes available.
 
-## 8. Trade-Offs
+If a worker fails or the queue is delayed, the job should be retried with a limit on the number of attempts. Failed jobs can be moved to a dead-letter queue for investigation and later recovery. Workers should be idempotent, meaning that retrying a job does not create duplicate or inconsistent results. Monitoring queue length and processing time helps the team detect backlogs before they significantly affect users.
 
-### Trade-Off 1: CDN Caching vs. Freshness
+## 8. Architectural Trade-Offs
 
-A CDN reduces latency and object-storage traffic by caching popular photos. However, cached content can become outdated after an image is replaced or deleted. SnapShare can use cache expiration, versioned image URLs, and cache invalidation to balance performance with freshness.
+### Trade-Off 1: CDN Caching vs. Content Freshness
 
-### Trade-Off 2: Read Replicas vs. Consistency
+A CDN improves performance by serving frequently requested photos from locations closer to users and reducing traffic to object storage. However, cached images may remain available after a photo has been updated or deleted. SnapShare can use versioned image URLs, appropriate cache expiration policies, and cache invalidation to balance fast delivery with content freshness.
 
-A read replica reduces the read load on the primary database. However, replication can lag behind the primary, meaning a newly uploaded photo or updated caption might not immediately appear in every read. The application can read recent changes from the primary when immediate consistency is required.
+### Trade-Off 2: Read Replicas vs. Immediate Consistency
+
+A database read replica distributes read traffic away from the primary database, improving scalability and helping feed requests remain responsive. However, replication is not always instantaneous, so a newly uploaded photo or updated caption may not immediately appear in reads served by the replica. SnapShare can send requests requiring immediate consistency to the primary database while allowing ordinary feed reads to use the replica.
 
 ### Trade-Off 3: Asynchronous Thumbnail Processing vs. Immediate Availability
 
-A queue allows uploads to complete without waiting for thumbnail generation, improving responsiveness. However, queue delays or worker failures can leave thumbnails temporarily unavailable. Retries, monitoring, and a dead-letter queue can help recover failed jobs.
+Using a queue allows users to upload original photos without waiting for thumbnails to be generated, making uploads more responsive and allowing workers to scale independently. However, thumbnails may be temporarily unavailable when workers are overloaded or fail. Bounded retries, dead-letter queues, idempotent workers, and monitoring help recover failed jobs and prevent a growing backlog from going unnoticed.
 
-### Trade-Off 4: Direct Uploads vs. Complexity
+### Trade-Off 4: Direct Object Storage Uploads vs. Implementation Complexity
 
-Uploading directly to object storage reduces application-server bandwidth and makes large-file handling easier to scale. However, it requires secure upload authorization, validation, and cleanup for incomplete or abandoned uploads.
-
-## 9. Conclusion
-
-SnapShare should use a horizontally scalable application architecture with a CDN, load balancer, application cache, primary database and read replica, object storage, and an asynchronous thumbnail-processing pipeline.
-
-Based on the stated assumptions, the system supports approximately 1 million daily active users, 11.57 average photo uploads per second, 578.70 average feed views per second, and about 748.25 TB of original-photo and thumbnail storage per year.
-
-The design prioritizes efficient read performance, independent scaling of image storage, and responsive uploads while accounting for consistency, caching, and background-processing trade-offs.
+Direct uploads reduce application-server bandwidth usage and make large-file handling easier to scale. However, they introduce additional security and coordination requirements, including short-lived upload permissions, file validation, upload completion checks, and cleanup of abandoned uploads. These controls are necessary to prevent unauthorized access and wasted storage.
