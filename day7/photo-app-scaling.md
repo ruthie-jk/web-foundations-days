@@ -143,7 +143,7 @@ Object storage is designed to store and retrieve large files efficiently and can
         [App Servers] <----> [Application Cache]
                |
                +----------> [Database Primary]
-
+```
 
 The CDN serves cached image files, while feed requests pass through the load balancer and application servers. The application cache reduces repeated data lookups, and feed reads can use the database read replica. Original photos and generated thumbnails are stored in object storage.
 
