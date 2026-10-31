@@ -1,0 +1,7 @@
+# Day 8 Reflection
+
+The most challenging concept for me during this course has been understanding how different components of a web application work together, especially how requests move between the client, application server, database and other services. I improved my understanding by working through the practical assignments, researching unfamiliar concepts and breaking system design problems into smaller components.
+
+For my TicketHub capstone, one area I would improve is the handling of simultaneous booking requests. Designing a system that allows many customers to browse and select seats is not enough; it must also ensure that two customers cannot successfully purchase the same seat. I would strengthen this part by testing concurrent booking scenarios more thoroughly and validating the use of database transactions, row-level locking and constraints. I have not received formal feedback yet, so this improvement is based on my own review of the design rather than feedback I have already received.
+
+Going forward, I want to learn more about database optimization, API development, concurrency and load testing. These skills will help me design web applications that remain reliable and responsive when many users access them at the same time.
